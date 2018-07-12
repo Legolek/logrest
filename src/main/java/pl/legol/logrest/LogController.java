@@ -1,7 +1,13 @@
 package pl.legol.logrest;
 
 import org.apache.commons.io.input.ReversedLinesFileReader;
+import org.apache.kafka.clients.consumer.Consumer;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.clients.consumer.ConsumerRecords;
+import org.apache.kafka.common.TopicPartition;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
+import org.springframework.kafka.core.ConsumerFactory;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -10,6 +16,7 @@ import java.io.File;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 
@@ -18,31 +25,28 @@ public class LogController {
 
     private CopyOnWriteArrayList<SseEmitter> emitters = new CopyOnWriteArrayList<>();
 
+    @Autowired
+    private ConsumerFactory consumerFactory;
+
     @GetMapping(value = "/logs", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter getLogs() throws IOException {
         SseEmitter sseEmitter = new SseEmitter(Duration.ofHours(1).toMillis());
-        emitters.add(sseEmitter);
         sseEmitter.onCompletion(() -> emitters.remove(sseEmitter));
         sseEmitter.onError((e) -> emitters.remove(sseEmitter));
 
-        ReversedLinesFileReader revFileReader = new ReversedLinesFileReader(new File("logs/Logrest.log"));
-        int counter = 0;
-        int lines = 50;
-        List<String> reversedLines = new ArrayList<>();
-
-        while (counter < lines) {
-            reversedLines.add(0, revFileReader.readLine());
-            counter++;
-        }
-
-        reversedLines.forEach(line -> {
+        Consumer consumer = consumerFactory.createConsumer();
+        consumer.assign(Collections.singleton(new TopicPartition("logs", 0)));
+        consumer.seek(new TopicPartition("logs", 0), 0);
+        ConsumerRecords polled = consumer.poll(100);
+        polled.records(new TopicPartition("logs", 0)).forEach(cr -> {
             try {
-                sseEmitter.send(line);
+                sseEmitter.send(((ConsumerRecord) cr).value().toString());
             } catch (IOException e) {
                 e.printStackTrace();
             }
         });
 
+        emitters.add(sseEmitter);
         return sseEmitter;
     }
 
